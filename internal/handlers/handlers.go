@@ -1,12 +1,20 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
+	"os"
+	"os/signal"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/Sid0r0vich/url-available-checker/internal/dto"
+	"github.com/Sid0r0vich/url-available-checker/internal/pdf"
+	"github.com/Sid0r0vich/url-available-checker/internal/repository"
 )
 
 type check struct {
@@ -14,41 +22,75 @@ type check struct {
 	Ind  int
 }
 
-func checkURL(url string, client *http.Client, result chan<- *check, ind int) {
-	resp, err := client.Get("https://" + url)
+func checkURL(url string, client *http.Client, ctx context.Context, result chan<- *check, ind int) {
+	req, err := http.NewRequestWithContext(ctx, "GET", "https://"+url, nil)
+	if err != nil {
+		result <- &check{Link: dto.Link{URL: url, Availability: false}, Ind: ind}
+		return
+	}
+
+	resp, err := client.Do(req)
 	if err == nil {
 		resp.Body.Close()
 	}
 	result <- &check{Link: dto.Link{URL: url, Availability: err == nil}, Ind: ind}
 }
 
+func linksToPrettyLinks(links []dto.Link) map[string]string {
+	res := make(map[string]string, len(links))
+	for _, link := range links {
+		if link.Availability {
+			res[link.URL] = "available"
+		} else {
+			res[link.URL] = "not available"
+		}
+	}
+
+	return res
+}
+
 func (api *API) GetLinksHanlder(w http.ResponseWriter, r *http.Request) {
 	enc := json.NewEncoder(w)
+
+	if r.Method != "POST" {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		enc.Encode(dto.NewErrorResponse("method not allowed"))
+		return
+	}
 
 	var req dto.LinksRequest
 	err := json.NewDecoder(r.Body).Decode(&req)
 	if err != nil {
 		w.WriteHeader(http.StatusBadRequest)
-		enc.Encode(dto.ErrorResponse{Error: "error parsing json"})
+		enc.Encode(dto.NewErrorResponse("error parsing json"))
 		return
 	}
 
 	client := &http.Client{
-		Timeout: 5 * time.Second,
+		Timeout: 10 * time.Second,
 	}
 
-	linkAvailability := make([]dto.Link, len(req.Links))
-	respLinks := make(map[string]string, len(req.Links))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		<-sigs
+		cancel()
+	}()
+
 	result := make(chan *check)
 	var wg sync.WaitGroup
 	for ind, url := range req.Links {
 		wg.Add(1)
-		go func() {
-			checkURL(url, client, result, ind)
+		go func(u string, i int) {
+			checkURL(u, client, ctx, result, i)
 			wg.Done()
-		}()
+		}(url, ind)
 	}
 
+	linkAvailability := make([]dto.Link, len(req.Links))
 	var wgConsumer sync.WaitGroup
 	wgConsumer.Add(1)
 	go func() {
@@ -59,11 +101,6 @@ func (api *API) GetLinksHanlder(w http.ResponseWriter, r *http.Request) {
 			}
 
 			linkAvailability[checkedURL.Ind] = checkedURL.Link
-			if checkedURL.Link.Availability {
-				respLinks[checkedURL.Link.URL] = "available"
-			} else {
-				respLinks[checkedURL.Link.URL] = "not available"
-			}
 		}
 
 		wgConsumer.Done()
@@ -75,9 +112,52 @@ func (api *API) GetLinksHanlder(w http.ResponseWriter, r *http.Request) {
 
 	id := api.Repo.AddLinks(linkAvailability)
 	w.WriteHeader(http.StatusOK)
-	enc.Encode(dto.LinkResponse{Links: respLinks, Num: id})
+	enc.Encode(dto.LinkResponse{Links: linksToPrettyLinks(linkAvailability), Num: id})
 }
 
 func (api *API) MakePDFHandler(w http.ResponseWriter, r *http.Request) {
+	enc := json.NewEncoder(w)
 
+	if r.Method != "POST" {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		enc.Encode(dto.NewErrorResponse("method not allowed"))
+		return
+	}
+
+	var req dto.MakePDFRequest
+	err := json.NewDecoder(r.Body).Decode(&req)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		enc.Encode(dto.NewErrorResponse("error parsing json"))
+		return
+	}
+
+	links, err := api.Repo.GetLinks(req.LinksList)
+	if err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			w.WriteHeader(http.StatusNotFound)
+			enc.Encode(dto.NewErrorResponse("links_num not found"))
+		} else {
+			w.WriteHeader(http.StatusInternalServerError)
+			enc.Encode(dto.NewErrorResponse("unexpected error"))
+		}
+
+		return
+	}
+
+	buf, err := pdf.GeneratePDFFromLinks(links)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		enc.Encode(dto.NewErrorResponse("unexpected error"))
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	w.Header().Set("Content-Type", "application/pdf")
+	w.Header().Set("Content-Disposition", `attachment; filename="links.pdf"`)
+
+	_, err = w.Write(buf.Bytes())
+	if err != nil {
+		fmt.Printf("error writing body: %v\n", err)
+	}
 }
