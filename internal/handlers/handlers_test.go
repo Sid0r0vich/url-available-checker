@@ -10,6 +10,12 @@ import (
 	"reflect"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
+)
+
+var (
+	client = http.Client{Timeout: time.Second * 10}
 )
 
 type Case struct {
@@ -20,86 +26,98 @@ type Case struct {
 	Expected interface{}
 }
 
+func NewTestServer(api *API) *httptest.Server {
+	r := http.NewServeMux()
+
+	r.HandleFunc("/links", api.GetLinksHanlder)
+	r.HandleFunc("/list", api.MakePDFHandler)
+
+	return httptest.NewServer(r)
+}
+
+func performRequest(client http.Client, url string, body interface{}) (int, interface{}, error) {
+	data, err := json.Marshal(body)
+	if err != nil {
+		return 0, nil, err
+	}
+
+	reqBody := bytes.NewReader(data)
+	req, err := http.NewRequest("POST", url, reqBody)
+	if err != nil {
+		return 0, nil, err
+	}
+	req.Header.Add("Content-Type", "application/json")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return 0, nil, fmt.Errorf("request error: %v", err)
+	}
+
+	defer resp.Body.Close()
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return 0, nil, fmt.Errorf("error readall: %v", err)
+	}
+
+	var result interface{}
+	err = json.Unmarshal(respBody, &result)
+	if err != nil {
+		return 0, nil, fmt.Errorf("cant unpack json: %v", err)
+	}
+
+	return resp.StatusCode, result, nil
+}
+
 func TestAPI(t *testing.T) {
 	cases := []Case{
 		Case{
-			Name:     "check /links",
+			Name:     "check one link",
 			URL:      "/links",
 			Status:   http.StatusOK,
 			Body:     map[string]interface{}{"links": []string{"google.com"}},
 			Expected: map[string]interface{}{"links": map[string]interface{}{"google.com": "available"}, "links_num": 0},
 		},
 		Case{
-			Name:   "check /links",
+			Name:   "check two links",
 			URL:    "/links",
 			Status: http.StatusOK,
-			Body:   map[string]interface{}{"links": []string{"not_available.com", "google.com"}},
+			Body:   map[string]interface{}{"links": []string{"not_available.com", "yandex.ru"}},
 			Expected: map[string]interface{}{
-				"links": map[string]interface{}{"not_available.com": "not available", "google.com": "available"}, "links_num": 1,
+				"links": map[string]interface{}{"not_available.com": "not available", "yandex.ru": "available"}, "links_num": 1,
+			},
+		},
+		Case{
+			Name:   "check double links",
+			URL:    "/links",
+			Status: http.StatusOK,
+			Body:   map[string]interface{}{"links": []string{"yandex.ru", "yandex.ru"}},
+			Expected: map[string]interface{}{
+				"links": map[string]interface{}{"yandex.ru": "available"}, "links_num": 2,
 			},
 		},
 	}
 
-	r := http.NewServeMux()
 	api := NewAPI()
-
-	r.HandleFunc("/links", api.GetLinksHanlder)
-	r.HandleFunc("/list", api.MakePDFHandler)
-
-	server := httptest.NewServer(r)
+	defer api.Cancel()
+	server := NewTestServer(api)
 
 	runCases(t, server, cases)
 }
 
 func runCases(t *testing.T, ts *httptest.Server, cases []Case) {
-	client := &http.Client{Timeout: time.Second}
-
 	for idx, item := range cases {
 		caseName := fmt.Sprintf("case %d: [%s]", idx, item.Name)
 
-		data, err := json.Marshal(item.Body)
+		code, resp, err := performRequest(client, ts.URL+item.URL, item.Body)
 		if err != nil {
-			t.Fatal(err)
+			t.Fatalf("[%s] %s", caseName, err)
 		}
 
-		reqBody := bytes.NewReader(data)
-		var errNewReq error
-		url := ts.URL + item.URL
-		fmt.Printf("URL: %s\n", url)
-		req, err := http.NewRequest("POST", url, reqBody)
-		if err != nil {
-			t.Fatal(errNewReq)
-		}
-		req.Header.Add("Content-Type", "application/json")
-
-		resp, err := client.Do(req)
-		if err != nil {
-			t.Fatalf("[%s] request error: %v", caseName, err)
-			continue
-		}
-		defer resp.Body.Close()
-		body, err := io.ReadAll(resp.Body)
-		if err != nil {
-			t.Fatalf("[%s] error readall: %v", caseName, err)
-			continue
-		}
-
-		if resp.StatusCode != item.Status {
-			t.Fatalf("[%s] expected http status %v, got %v", caseName, item.Status, resp.StatusCode)
-			continue
-		}
-
-		var result interface{}
-		err = json.Unmarshal(body, &result)
-		if err != nil {
-			t.Fatalf("[%s] cant unpack json: %v", caseName, err)
-			continue
-		}
+		assert.Equal(t, item.Status, code)
 
 		jsonExpected, err := json.Marshal(item.Expected)
 		if err != nil {
 			t.Fatalf("[%s] cant marshal expected json: %v", caseName, err)
-			continue
 		}
 
 		var interfaceExpected interface{}
@@ -108,10 +126,28 @@ func runCases(t *testing.T, ts *httptest.Server, cases []Case) {
 			t.Fatalf("[%s] cant unmarshal expected json: %v", caseName, err)
 		}
 
-		if !reflect.DeepEqual(result, interfaceExpected) {
-			t.Fatalf("[%s] results not match\nGot : %#v\nExpected: %#v", caseName, result, interfaceExpected)
-			continue
+		if !reflect.DeepEqual(resp, interfaceExpected) {
+			t.Errorf("[%s] results not match\nGot : %#v\nExpected: %#v", caseName, resp, interfaceExpected)
 		}
+
+		time.Sleep(10000)
 	}
 
+}
+
+func TestCancel(t *testing.T) {
+	api := NewAPI()
+	server := NewTestServer(api)
+
+	testCase := Case{
+		URL:  "/links",
+		Body: map[string]interface{}{"links": []string{"google.com"}},
+	}
+
+	// я не смогу проверить, что все запросы которые в работе, завершаются,
+	// потому что не смогу извне отменить контекст ровно в момент обработки этих запросов
+	api.Cancel()
+	code, _, err := performRequest(client, server.URL+testCase.URL, testCase.Body)
+	assert.NoError(t, err)
+	assert.Equal(t, http.StatusServiceUnavailable, code)
 }

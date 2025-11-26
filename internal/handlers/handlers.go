@@ -1,15 +1,11 @@
 package handlers
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
-	"os"
-	"os/signal"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/Sid0r0vich/url-available-checker/internal/dto"
@@ -22,9 +18,10 @@ type check struct {
 	Ind  int
 }
 
-func checkURL(url string, client *http.Client, ctx context.Context, result chan<- *check, ind int) {
-	req, err := http.NewRequestWithContext(ctx, "GET", "https://"+url, nil)
+func checkURL(url string, client *http.Client, result chan<- *check, ind int) {
+	req, err := http.NewRequest("GET", "https://"+url, nil)
 	if err != nil {
+		fmt.Printf("request error: %v", err)
 		result <- &check{Link: dto.Link{URL: url, Availability: false}, Ind: ind}
 		return
 	}
@@ -52,6 +49,14 @@ func linksToPrettyLinks(links []dto.Link) map[string]string {
 func (api *API) GetLinksHanlder(w http.ResponseWriter, r *http.Request) {
 	enc := json.NewEncoder(w)
 
+	select {
+	case <-api.Context.Done():
+		w.WriteHeader(http.StatusServiceUnavailable)
+		enc.Encode(dto.NewErrorResponse("server unavailable"))
+		return
+	default:
+	}
+
 	if r.Method != "POST" {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		enc.Encode(dto.NewErrorResponse("method not allowed"))
@@ -70,22 +75,12 @@ func (api *API) GetLinksHanlder(w http.ResponseWriter, r *http.Request) {
 		Timeout: 10 * time.Second,
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	sigs := make(chan os.Signal, 1)
-	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
-	go func() {
-		<-sigs
-		cancel()
-	}()
-
 	result := make(chan *check)
 	var wg sync.WaitGroup
 	for ind, url := range req.Links {
 		wg.Add(1)
 		go func(u string, i int) {
-			checkURL(u, client, ctx, result, i)
+			checkURL(u, client, result, i)
 			wg.Done()
 		}(url, ind)
 	}

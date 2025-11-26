@@ -14,6 +14,7 @@ var (
 func main() {
 	r := http.NewServeMux()
 	api := handlers.NewAPI()
+	defer api.Cancel()
 
 	r.HandleFunc("/links", api.GetLinksHanlder)
 	r.HandleFunc("/list", api.MakePDFHandler)
