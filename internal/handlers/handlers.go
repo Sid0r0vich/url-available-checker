@@ -20,9 +20,10 @@ type check struct {
 
 func checkURL(url string, client *http.Client, result chan<- *check, ind int) {
 	req, err := http.NewRequest("GET", "https://"+url, nil)
+	time := time.Now()
 	if err != nil {
 		fmt.Printf("request error: %v", err)
-		result <- &check{Link: dto.Link{URL: url, Availability: false}, Ind: ind}
+		result <- &check{Link: dto.Link{URL: url, Availability: false, Time: time}, Ind: ind}
 		return
 	}
 
@@ -30,7 +31,7 @@ func checkURL(url string, client *http.Client, result chan<- *check, ind int) {
 	if err == nil {
 		resp.Body.Close()
 	}
-	result <- &check{Link: dto.Link{URL: url, Availability: err == nil}, Ind: ind}
+	result <- &check{Link: dto.Link{URL: url, Availability: err == nil, Time: time}, Ind: ind}
 }
 
 func linksToPrettyLinks(links []dto.Link) map[string]string {
@@ -48,14 +49,6 @@ func linksToPrettyLinks(links []dto.Link) map[string]string {
 
 func (api *API) GetLinksHanlder(w http.ResponseWriter, r *http.Request) {
 	enc := json.NewEncoder(w)
-
-	select {
-	case <-api.Context.Done():
-		w.WriteHeader(http.StatusServiceUnavailable)
-		enc.Encode(dto.NewErrorResponse("server unavailable"))
-		return
-	default:
-	}
 
 	if r.Method != "POST" {
 		w.WriteHeader(http.StatusMethodNotAllowed)

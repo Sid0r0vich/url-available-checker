@@ -1,8 +1,11 @@
 package dto
 
+import "time"
+
 type Link struct {
 	URL          string
 	Availability bool
+	Time         time.Time
 }
 
 type LinksRequest struct {

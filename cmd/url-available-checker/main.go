@@ -1,26 +1,47 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
 	handlers "github.com/Sid0r0vich/url-available-checker/internal/handlers"
 )
 
 var (
-	PORT = "8082"
+	SERVER_ADDR = ":8082"
 )
 
 func main() {
-	r := http.NewServeMux()
 	api := handlers.NewAPI()
-	defer api.Cancel()
+	r := handlers.NewMux(api)
 
-	r.HandleFunc("/links", api.GetLinksHanlder)
-	r.HandleFunc("/list", api.MakePDFHandler)
+	s := &http.Server{
+		Addr:    SERVER_ADDR,
+		Handler: r,
+	}
 
-	fmt.Printf("Server started on :%s\n", PORT)
-	if err := http.ListenAndServe(fmt.Sprintf(":%s", PORT), r); err != nil {
+	stopServer := make(chan os.Signal, 1)
+	signal.Notify(stopServer, os.Interrupt, syscall.SIGTERM)
+
+	go func() {
+		<-stopServer
+		fmt.Println("\nStopping server")
+
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		if err := s.Shutdown(ctx); err != nil {
+			fmt.Printf("Error stopping server: %v\n", err)
+		}
+	}()
+
+	fmt.Printf("Server started on %s\n", SERVER_ADDR)
+	if err := s.ListenAndServe(); err != nil {
 		fmt.Printf("Server error: %v", err)
 	}
 }

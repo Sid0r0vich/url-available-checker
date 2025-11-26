@@ -26,15 +26,6 @@ type Case struct {
 	Expected interface{}
 }
 
-func NewTestServer(api *API) *httptest.Server {
-	r := http.NewServeMux()
-
-	r.HandleFunc("/links", api.GetLinksHanlder)
-	r.HandleFunc("/list", api.MakePDFHandler)
-
-	return httptest.NewServer(r)
-}
-
 func performRequest(client http.Client, url string, body interface{}) (int, interface{}, error) {
 	data, err := json.Marshal(body)
 	if err != nil {
@@ -98,8 +89,7 @@ func TestAPI(t *testing.T) {
 	}
 
 	api := NewAPI()
-	defer api.Cancel()
-	server := NewTestServer(api)
+	server := httptest.NewServer(NewMux(api))
 
 	runCases(t, server, cases)
 }
@@ -129,25 +119,6 @@ func runCases(t *testing.T, ts *httptest.Server, cases []Case) {
 		if !reflect.DeepEqual(resp, interfaceExpected) {
 			t.Errorf("[%s] results not match\nGot : %#v\nExpected: %#v", caseName, resp, interfaceExpected)
 		}
-
-		time.Sleep(10000)
 	}
 
-}
-
-func TestCancel(t *testing.T) {
-	api := NewAPI()
-	server := NewTestServer(api)
-
-	testCase := Case{
-		URL:  "/links",
-		Body: map[string]interface{}{"links": []string{"google.com"}},
-	}
-
-	// я не смогу проверить, что все запросы которые в работе, завершаются,
-	// потому что не смогу извне отменить контекст ровно в момент обработки этих запросов
-	api.Cancel()
-	code, _, err := performRequest(client, server.URL+testCase.URL, testCase.Body)
-	assert.NoError(t, err)
-	assert.Equal(t, http.StatusServiceUnavailable, code)
 }

@@ -19,7 +19,7 @@ func GeneratePDFFromLinks(links []dto.Link) (*bytes.Buffer, error) {
 		if link.Availability {
 			status = "available"
 		}
-		line := link.URL + " : " + status
+		line := link.URL + ": " + status
 		file.Cell(0, 10, line)
 		file.Ln(10)
 	}
