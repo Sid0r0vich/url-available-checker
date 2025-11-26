@@ -36,12 +36,12 @@ func main() {
 		defer cancel()
 
 		if err := s.Shutdown(ctx); err != nil {
-			fmt.Printf("Error stopping server: %v\n", err)
+			fmt.Printf("Server error: %v\n", err)
 		}
 	}()
 
 	fmt.Printf("Server started on %s\n", SERVER_ADDR)
 	if err := s.ListenAndServe(); err != nil {
-		fmt.Printf("Server error: %v", err)
+		fmt.Printf("Server error: %v\n", err)
 	}
 }

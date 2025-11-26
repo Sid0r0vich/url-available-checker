@@ -2,6 +2,7 @@ package pdf
 
 import (
 	"bytes"
+	"fmt"
 
 	"github.com/Sid0r0vich/url-available-checker/internal/dto"
 	"github.com/jung-kurt/gofpdf"
@@ -19,7 +20,7 @@ func GeneratePDFFromLinks(links []dto.Link) (*bytes.Buffer, error) {
 		if link.Availability {
 			status = "available"
 		}
-		line := link.URL + ": " + status
+		line := fmt.Sprintf("%s %s: %s", link.Time.Format("2006-01-02 15:04:05"), link.URL, status)
 		file.Cell(0, 10, line)
 		file.Ln(10)
 	}
