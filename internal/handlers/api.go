@@ -18,7 +18,7 @@ func NewMux(api *API) *http.ServeMux {
 	r := http.NewServeMux()
 
 	r.HandleFunc("/links", api.GetLinksHanlder)
-	r.HandleFunc("/list", api.MakePDFHandler)
+	r.HandleFunc("/pdf", api.MakePDFHandler)
 
 	return r
 }
